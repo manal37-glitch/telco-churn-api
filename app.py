@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 import joblib
 import pandas as pd
@@ -73,12 +73,29 @@ class CustomerInput(BaseModel):
     PaperlessBilling: str = Field(..., description="Yes or No")
     MonthlyCharges: float = Field(..., ge=0)
     TotalCharges: Any = Field(..., description="Numeric value or blank string")
-    InternetService: str = Field(..., description="DSL, Fiber optic, or No")
-    Contract: str = Field(..., description="Month-to-month, One year, or Two year")
-    PaymentMethod: str = Field(..., description="Bank transfer, Credit card, Electronic check, or Mailed check")
+    InternetService: Literal["DSL", "Fiber optic", "No"]
+    Contract: Literal["Month-to-month", "One year", "Two year"]
+    PaymentMethod: Literal[
+        "Bank transfer (automatic)",
+        "Credit card (automatic)",
+        "Electronic check",
+        "Mailed check",
+    ]
 
 
 app = FastAPI(title="Telco Churn Prediction API", version="1.0.0")
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "Telco Churn Prediction API is running.",
+        "endpoints": {
+            "health": "/health",
+            "predict": "/predict",
+            "docs": "/docs",
+        },
+    }
 
 
 def _normalize_yes_no(value: Any) -> Any:
@@ -129,12 +146,6 @@ def preprocess_customer(payload: Dict[str, Any]) -> pd.DataFrame:
     df["gender"] = df["gender"].map(_normalize_gender)
     df["SeniorCitizen"] = pd.to_numeric(df["SeniorCitizen"], errors="coerce").fillna(0).astype(int)
 
-    if not os.path.exists(SCALER_PATH):
-        raise FileNotFoundError(
-            f"Missing {SCALER_PATH}. The trained scaler must be saved alongside the model to match the training preprocessing."
-        )
-
-    scaler = joblib.load(SCALER_PATH)
     df[SCALE_COLUMNS] = scaler.transform(df[SCALE_COLUMNS])
 
     df = pd.get_dummies(df, columns=CATEGORICAL_COLUMNS, dtype=int)
@@ -148,8 +159,13 @@ def preprocess_customer(payload: Dict[str, Any]) -> pd.DataFrame:
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+if not os.path.exists(SCALER_PATH):
+    raise FileNotFoundError(
+        f"Missing {SCALER_PATH}. The trained scaler must be saved alongside the model to match the training preprocessing."
+    )
 
 model = joblib.load(MODEL_PATH)
+scaler = joblib.load(SCALER_PATH)
 
 
 @app.get("/health")
@@ -161,16 +177,23 @@ def health_check():
 def predict(payload: CustomerInput):
     try:
         features = preprocess_customer(payload.model_dump())
+    except ValueError as exc:
+        # Bad/unsupported values the client sent (e.g. unrecognized gender string)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - unexpected server-side failure
+        raise HTTPException(status_code=500, detail="Internal error during preprocessing") from exc
+
+    try:
         prediction = model.predict(features)
         probabilities = model.predict_proba(features)
+    except Exception as exc:  # pragma: no cover - unexpected server-side failure
+        raise HTTPException(status_code=500, detail="Internal error during inference") from exc
 
-        return {
-            "churn_prediction": int(prediction[0]),
-            "probability_no_churn": float(probabilities[0][0]),
-            "probability_yes_churn": float(probabilities[0][1]),
-        }
-    except Exception as exc:  # pragma: no cover - API error branch
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "churn_prediction": int(prediction[0]),
+        "probability_no_churn": float(probabilities[0][0]),
+        "probability_yes_churn": float(probabilities[0][1]),
+    }
 
 
 if __name__ == "__main__":
