@@ -110,16 +110,6 @@ Deployed on Render as a web service:
 - Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 
-## Monitoring model performance degradation in production
-
-A model's accuracy at launch doesn't hold forever — customer behavior, pricing, and competitor offers shift over time ("concept drift"), and the population of customers hitting the API can shift too ("data drift"). To catch this in production, I'd track:
-
-1. **Input data drift** — compare the distribution of incoming request features (tenure, MonthlyCharges, contract mix, etc.) against the training distribution on a rolling window, using a statistical test like Population Stability Index (PSI) or Kolmogorov–Smirnov. A large shift signals the model is now scoring a different population than it was trained on.
-2. **Prediction drift** — track the distribution of predicted churn probabilities over time. A sudden shift (e.g., the model suddenly predicting churn far more or less often) is an early warning sign even before ground truth is available.
-3. **Ground-truth performance** — once actual churn outcomes are known (e.g., 30/60/90 days later when a customer does or doesn't cancel), recompute accuracy, precision, recall, and ROC AUC on that labeled batch and compare against the baseline test metrics above. This is the real signal, but it's lagged.
-4. **Business-metric proxy** — track how many customers flagged as high-risk actually convert on retention offers, as a faster proxy than waiting for full churn labels.
-5. **Alerting thresholds** — set alert thresholds on drift scores and rolling recall/precision (e.g., alert if churn recall drops more than 10 points from the 0.777 baseline), and trigger a retraining pipeline on a fixed cadence (e.g., quarterly) or when drift/performance alerts fire.
-6. **Logging** — log every request's input features, prediction, and probability (with customer ID hashed/anonymized) so drift analysis and retraining have real production data to work from, not just the original training set.
 
 ## Tech stack
 
